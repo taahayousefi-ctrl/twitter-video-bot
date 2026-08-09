@@ -2,7 +2,6 @@ import os
 import re
 import asyncio
 import tempfile
-from pathlib import Path
 
 from telegram import Update
 from telegram.ext import (
@@ -29,8 +28,8 @@ def download_video(url, output_dir):
     output_template = os.path.join(output_dir, "%(id)s.%(ext)s")
 
     options = {
-        "format": "bestvideo*+bestaudio/best",
-        "merge_output_format": "mp4",
+        # بدون ffmpeg؛ فقط فایل ویدئویی آماده
+        "format": "best[ext=mp4]/best",
         "outtmpl": output_template,
         "noplaylist": True,
         "quiet": True,
@@ -41,12 +40,10 @@ def download_video(url, output_dir):
         info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
 
-        mp4_file = Path(filename).with_suffix(".mp4")
+        if os.path.exists(filename):
+            return filename
 
-        if mp4_file.exists():
-            return str(mp4_file)
-
-        return filename
+        raise Exception("Video file was not created")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,9 +78,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 url,
                 temp_dir,
             )
-
-            if not os.path.exists(video_path):
-                raise Exception("Video file was not created")
 
             await message.edit_text("📤 در حال ارسال ویدئو...")
 
