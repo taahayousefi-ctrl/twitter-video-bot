@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import tempfile
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import (
@@ -18,18 +19,21 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 ALLOWED_USER_ID = 1337113228
 
 
-def extract_twitter_url(text):
-    pattern = r"https?://(?:www\.)?(?:x\.com|twitter\.com)/[^\s]+"
+def extract_video_url(text):
+    pattern = r"https?://[^\s]+"
     match = re.search(pattern, text)
     return match.group(0) if match else None
 
 
 def download_video(url, output_dir):
-    output_template = os.path.join(output_dir, "%(id)s.%(ext)s")
+    output_template = os.path.join(
+        output_dir,
+        "%(id)s.%(ext)s"
+    )
 
     options = {
-        # بدون ffmpeg؛ فقط فایل ویدئویی آماده
-        "format": "best[ext=mp4]/best",
+        "format": "bestvideo*+bestaudio/best",
+        "merge_output_format": "mp4",
         "outtmpl": output_template,
         "noplaylist": True,
         "quiet": True,
@@ -40,10 +44,12 @@ def download_video(url, output_dir):
         info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
 
-        if os.path.exists(filename):
-            return filename
+        mp4_file = Path(filename).with_suffix(".mp4")
 
-        raise Exception("Video file was not created")
+        if mp4_file.exists():
+            return str(mp4_file)
+
+        return filename
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -51,19 +57,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "لینک ویدئوی X/Twitter را بفرست."
+        "لینک ویدئو از X، YouTube یا Instagram را بفرست."
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     if update.effective_user.id != ALLOWED_USER_ID:
         return
 
-    url = extract_twitter_url(update.message.text or "")
+    url = extract_video_url(
+        update.message.text or ""
+    )
 
     if not url:
         await update.message.reply_text(
-            "یک لینک معتبر از X/Twitter بفرست."
+            "یک لینک ویدئوی معتبر بفرست."
         )
         return
 
@@ -79,7 +90,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 temp_dir,
             )
 
-            await message.edit_text("📤 در حال ارسال ویدئو...")
+            if not os.path.exists(video_path):
+                raise Exception(
+                    "Video file was not created"
+                )
+
+            await message.edit_text(
+                "📤 در حال ارسال ویدئو..."
+            )
 
             with open(video_path, "rb") as video:
                 await update.message.reply_video(
@@ -98,9 +116,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
