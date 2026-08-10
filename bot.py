@@ -2,9 +2,9 @@ import os
 import re
 import asyncio
 import tempfile
-import requests
 from pathlib import Path
 
+import requests
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -17,7 +17,7 @@ from yt_dlp import YoutubeDL
 
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-TUNELIO_API_KEY = os.environ["TUNELIO_API_KEY"]
+TUNELIO_API_KEY = os.environ.get("TUNELIO_API_KEY")
 
 ALLOWED_USER_ID = 1337113228
 
@@ -28,7 +28,7 @@ def extract_video_url(text):
     return match.group(0) if match else None
 
 
-def is_youtube(url):
+def is_youtube_url(url):
     return (
         "youtube.com/" in url
         or "youtu.be/" in url
@@ -51,11 +51,7 @@ def download_video(url, output_dir):
     }
 
     with YoutubeDL(options) as ydl:
-        info = ydl.extract_info(
-            url,
-            download=True
-        )
-
+        info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
 
         mp4_file = Path(filename).with_suffix(".mp4")
@@ -66,56 +62,62 @@ def download_video(url, output_dir):
         return filename
 
 
-def get_youtube_link(url):
-    api_url = "https://tunelio.dev/create"
-
-    params = {
-        "quality": "480p",
-        "url": url,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {TUNELIO_API_KEY}",
-    }
+def get_tunelio_link(url):
+    if not TUNELIO_API_KEY:
+        raise Exception("TUNELIO_API_KEY is not configured")
 
     response = requests.get(
-        api_url,
-        params=params,
-        headers=headers,
+        "https://tunelio.dev/create",
+        params={
+            "quality": "480p",
+            "url": url,
+        },
+        headers={
+            "Authorization": f"Bearer {TUNELIO_API_KEY}",
+        },
         timeout=60,
     )
 
-    if response.status_code in (401, 403):
-        raise Exception(
-            "TUNELIO_KEY_ERROR"
-        )
-
-    if response.status_code == 429:
-        raise Exception(
-            "TUNELIO_LIMIT"
-        )
+    # اعتبار تمام شده / کلید نامعتبر
+    if response.status_code in (401, 403, 429):
+        raise RuntimeError("TUNELIO_LIMIT")
 
     response.raise_for_status()
 
     data = response.json()
 
+    # بعضی خطاها با status=200 برمی‌گردند
     if data.get("status") != "ok":
-        raise Exception(
-            data.get("error", "Tunelio error")
+        error_text = str(data).lower()
+
+        if any(
+            x in error_text
+            for x in (
+                "limit",
+                "quota",
+                "credit",
+                "rate",
+                "unauthorized",
+            )
+        ):
+            raise RuntimeError("TUNELIO_LIMIT")
+
+        raise RuntimeError(
+            data.get("message")
+            or data.get("error")
+            or "Tunelio error"
         )
 
-    download_url = data.get("url")
+    tunnel_url = data.get("url")
 
-    if not download_url:
-        raise Exception(
-            "No download URL returned"
-        )
+    if not tunnel_url:
+        raise RuntimeError("Tunelio did not return a download link")
 
     return {
-        "url": download_url,
+        "url": tunnel_url,
         "filename": data.get(
             "filename",
-            "video.mp4"
+            "youtube_video.mp4"
         ),
         "quality": data.get(
             "quality",
@@ -124,15 +126,12 @@ def get_youtube_link(url):
     }
 
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ALLOWED_USER_ID:
         return
 
     await update.message.reply_text(
-        "لینک ویدئو از X یا YouTube را بفرست."
+        "لینک ویدئو از X، YouTube یا Instagram را بفرست."
     )
 
 
@@ -157,57 +156,56 @@ async def handle_message(
         "⏳ در حال بررسی لینک..."
     )
 
-    # -------------------------
-    # YouTube
-    # -------------------------
-
-    if is_youtube(url):
+    # -----------------------------
+    # YouTube → Tunelio
+    # -----------------------------
+    if is_youtube_url(url):
         try:
+            await message.edit_text(
+                "⏳ در حال آماده‌سازی لینک YouTube..."
+            )
+
             result = await asyncio.to_thread(
-                get_youtube_link,
+                get_tunelio_link,
                 url,
             )
 
+            filename = result["filename"]
+            tunnel_url = result["url"]
+
             await message.edit_text(
-                "✅ لینک دانلود آماده شد.\n\n"
-                f"🎬 {result['filename']}\n"
+                f"✅ آماده شد\n\n"
+                f"🎬 {filename}\n"
                 f"📺 کیفیت: {result['quality']}\n\n"
-                f"{result['url']}"
+                f"🔗 لینک دانلود:\n{tunnel_url}"
             )
 
-        except Exception as e:
-            print("YOUTUBE ERROR:", e)
-
-            error = str(e)
-
-            if error == "TUNELIO_KEY_ERROR":
-                text = (
-                    "❌ کلید Tunelio معتبر نیست یا "
-                    "منقضی شده.\n\n"
-                    "یک API Key جدید بگیر و در Termux "
-                    "جایگزینش کن."
+        except RuntimeError as e:
+            if str(e) == "TUNELIO_LIMIT":
+                await message.edit_text(
+                    "❌ اعتبار سرویس YouTube تمام شده.\n\n"
+                    "🔑 یک کلید جدید Tunelio بگیر و "
+                    "متغیر TUNELIO_API_KEY را با کلید جدید تنظیم کن."
                 )
-
-            elif error == "TUNELIO_LIMIT":
-                text = (
-                    "❌ اعتبار Tunelio تمام شده.\n\n"
-                    "برای ادامه باید API Key جدید "
-                    "بگیری."
-                )
-
             else:
-                text = (
-                    "❌ نتونستم لینک YouTube رو بگیرم."
+                print("TUNELIO ERROR:", e)
+
+                await message.edit_text(
+                    "❌ سرویس YouTube نتونست لینک دانلود بسازه."
                 )
 
-            await message.edit_text(text)
+        except Exception as e:
+            print("TUNELIO ERROR:", repr(e))
+
+            await message.edit_text(
+                "❌ در دریافت لینک YouTube مشکلی پیش آمد."
+            )
 
         return
 
-    # -------------------------
-    # X / Instagram
-    # -------------------------
-
+    # -----------------------------
+    # X / Instagram → yt-dlp
+    # -----------------------------
     await message.edit_text(
         "⏳ در حال دانلود..."
     )
@@ -229,11 +227,7 @@ async def handle_message(
                 "📤 در حال ارسال ویدئو..."
             )
 
-            with open(
-                video_path,
-                "rb"
-            ) as video:
-
+            with open(video_path, "rb") as video:
                 await update.message.reply_video(
                     video=video,
                     supports_streaming=True,
@@ -257,10 +251,7 @@ def main():
     )
 
     app.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
+        CommandHandler("start", start)
     )
 
     app.add_handler(
