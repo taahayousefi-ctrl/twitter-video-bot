@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import tempfile
+import requests
 from pathlib import Path
 
 from telegram import Update
@@ -16,6 +17,8 @@ from yt_dlp import YoutubeDL
 
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
+TUNELIO_API_KEY = os.environ["TUNELIO_API_KEY"]
+
 ALLOWED_USER_ID = 1337113228
 
 
@@ -23,6 +26,13 @@ def extract_video_url(text):
     pattern = r"https?://[^\s]+"
     match = re.search(pattern, text)
     return match.group(0) if match else None
+
+
+def is_youtube(url):
+    return (
+        "youtube.com/" in url
+        or "youtu.be/" in url
+    )
 
 
 def download_video(url, output_dir):
@@ -41,7 +51,11 @@ def download_video(url, output_dir):
     }
 
     with YoutubeDL(options) as ydl:
-        info = ydl.extract_info(url, download=True)
+        info = ydl.extract_info(
+            url,
+            download=True
+        )
+
         filename = ydl.prepare_filename(info)
 
         mp4_file = Path(filename).with_suffix(".mp4")
@@ -52,12 +66,73 @@ def download_video(url, output_dir):
         return filename
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def get_youtube_link(url):
+    api_url = "https://tunelio.dev/create"
+
+    params = {
+        "quality": "480p",
+        "url": url,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {TUNELIO_API_KEY}",
+    }
+
+    response = requests.get(
+        api_url,
+        params=params,
+        headers=headers,
+        timeout=60,
+    )
+
+    if response.status_code in (401, 403):
+        raise Exception(
+            "TUNELIO_KEY_ERROR"
+        )
+
+    if response.status_code == 429:
+        raise Exception(
+            "TUNELIO_LIMIT"
+        )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if data.get("status") != "ok":
+        raise Exception(
+            data.get("error", "Tunelio error")
+        )
+
+    download_url = data.get("url")
+
+    if not download_url:
+        raise Exception(
+            "No download URL returned"
+        )
+
+    return {
+        "url": download_url,
+        "filename": data.get(
+            "filename",
+            "video.mp4"
+        ),
+        "quality": data.get(
+            "quality",
+            "480p"
+        ),
+    }
+
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     if update.effective_user.id != ALLOWED_USER_ID:
         return
 
     await update.message.reply_text(
-        "لینک ویدئو از X، YouTube یا Instagram را بفرست."
+        "لینک ویدئو از X یا YouTube را بفرست."
     )
 
 
@@ -79,6 +154,61 @@ async def handle_message(
         return
 
     message = await update.message.reply_text(
+        "⏳ در حال بررسی لینک..."
+    )
+
+    # -------------------------
+    # YouTube
+    # -------------------------
+
+    if is_youtube(url):
+        try:
+            result = await asyncio.to_thread(
+                get_youtube_link,
+                url,
+            )
+
+            await message.edit_text(
+                "✅ لینک دانلود آماده شد.\n\n"
+                f"🎬 {result['filename']}\n"
+                f"📺 کیفیت: {result['quality']}\n\n"
+                f"{result['url']}"
+            )
+
+        except Exception as e:
+            print("YOUTUBE ERROR:", e)
+
+            error = str(e)
+
+            if error == "TUNELIO_KEY_ERROR":
+                text = (
+                    "❌ کلید Tunelio معتبر نیست یا "
+                    "منقضی شده.\n\n"
+                    "یک API Key جدید بگیر و در Termux "
+                    "جایگزینش کن."
+                )
+
+            elif error == "TUNELIO_LIMIT":
+                text = (
+                    "❌ اعتبار Tunelio تمام شده.\n\n"
+                    "برای ادامه باید API Key جدید "
+                    "بگیری."
+                )
+
+            else:
+                text = (
+                    "❌ نتونستم لینک YouTube رو بگیرم."
+                )
+
+            await message.edit_text(text)
+
+        return
+
+    # -------------------------
+    # X / Instagram
+    # -------------------------
+
+    await message.edit_text(
         "⏳ در حال دانلود..."
     )
 
@@ -99,7 +229,11 @@ async def handle_message(
                 "📤 در حال ارسال ویدئو..."
             )
 
-            with open(video_path, "rb") as video:
+            with open(
+                video_path,
+                "rb"
+            ) as video:
+
                 await update.message.reply_video(
                     video=video,
                     supports_streaming=True,
@@ -123,7 +257,10 @@ def main():
     )
 
     app.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start
+        )
     )
 
     app.add_handler(
@@ -134,6 +271,7 @@ def main():
     )
 
     print("Bot is running...")
+
     app.run_polling()
 
 
