@@ -2,7 +2,6 @@ import os
 import re
 import asyncio
 import tempfile
-from pathlib import Path
 
 from telegram import Update
 from telegram.ext import (
@@ -35,21 +34,29 @@ def download_video(url, output_dir):
     )
 
     options = {
+
+        # فقط فایل آماده با صدا و تصویر
         # بدون نیاز به ffmpeg
-        "format": "best[ext=mp4]/best",
+        "format": "http-832/http-256/best",
 
         "outtmpl": output_template,
 
         "noplaylist": True,
 
-        "quiet": True,
-        "no_warnings": True,
+        "quiet": False,
+        "no_warnings": False,
+
+        "ignoreerrors": False,
 
         "http_headers": {
             "User-Agent":
                 "Mozilla/5.0 (Android 12; Mobile)"
         },
+
+        # جلوگیری از merge
+        "merge_output_format": None,
     }
+
 
     with YoutubeDL(options) as ydl:
 
@@ -60,19 +67,26 @@ def download_video(url, output_dir):
 
         filename = ydl.prepare_filename(info)
 
-        file_path = Path(filename)
 
-        if file_path.exists():
-            return str(file_path)
+        if os.path.exists(filename):
+            return filename
 
-        mp4_file = file_path.with_suffix(".mp4")
 
-        if mp4_file.exists():
-            return str(mp4_file)
+        # اگر پسوند تغییر کرده بود
+        for file in os.listdir(output_dir):
+            path = os.path.join(
+                output_dir,
+                file
+            )
+
+            if os.path.isfile(path):
+                return path
+
 
         raise Exception(
             "Video file was not created"
         )
+
 
 
 async def start(
@@ -86,6 +100,7 @@ async def start(
     await update.message.reply_text(
         "لینک ویدئوی X/Twitter را بفرست."
     )
+
 
 
 async def handle_message(
@@ -155,7 +170,7 @@ async def handle_message(
 
 
             await status.edit_text(
-                "❌ دانلود ویدئو ناموفق بود."
+                "❌ دانلود ناموفق بود."
             )
 
 
