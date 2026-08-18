@@ -34,14 +34,14 @@ def download_video(url, output_dir):
     )
 
     options = {
-        # انتخاب بهترین فرمتی که مستقیماً از طریق لینک https دانلود می‌شود (بدون نیاز به ffmpeg و m3u8)
-        "format": "best[ext=mp4][protocol=https]/best[protocol=https]/best",
+        # با این دستور yt-dlp فقط و فقط دنبال یک فایل تک‌قسمتی mp4 با لینک مستقیم می‌گردد
+        # و هیچ تلاشی برای ادغام یا استفاده از m3u8 نخواهد کرد.
+        "format": "best[ext=mp4][protocol=https]",
 
-        # جلوگیری کامل از هرگونه merge و post-process
-        "merge_output_format": None,
-        "postprocessors": [],
+        # اضافه کردن مسیر خروجی که در کد قبلی جا افتاده بود
+        "outtmpl": output_template,
+
         "noplaylist": True,
-
         "quiet": True,
         "no_warnings": True,
 
@@ -57,7 +57,7 @@ def download_video(url, output_dir):
         if os.path.exists(filename):
             return filename
 
-        # fallback اگر اسم فایل فرق کرده باشه
+        # fallback در صورتی که اسم فایل با چیزی که انتظار داشتیم فرق کند
         for f in os.listdir(output_dir):
             path = os.path.join(output_dir, f)
             if os.path.isfile(path) and path.endswith((".mp4", ".mkv", ".webm")):
