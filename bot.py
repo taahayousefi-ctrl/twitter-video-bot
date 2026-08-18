@@ -34,8 +34,8 @@ def download_video(url, output_dir):
     )
 
     options = {
-        # فقط فرمت آماده، بدون merge
-        "format": "http-832/http-256/best[ext=mp4][vcodec!=none][acodec!=none]",
+        # فقط فرمت‌های تک‌فایلی (ویدیو + صدا با هم) — بدون نیاز به ffmpeg
+        "format": "best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best",
 
         "outtmpl": output_template,
 
@@ -44,15 +44,14 @@ def download_video(url, output_dir):
         "quiet": True,
         "no_warnings": True,
 
-        # جلوگیری کامل از post process
+        # جلوگیری کامل از post process و merge
         "postprocessors": [],
+        "merge_output_format": None,
 
         "http_headers": {
-            "User-Agent":
-                "Mozilla/5.0 (Android 12; Mobile)"
+            "User-Agent": "Mozilla/5.0 (Android 12; Mobile) AppleWebKit/537.36"
         },
     }
-
 
     with YoutubeDL(options) as ydl:
 
@@ -63,26 +62,15 @@ def download_video(url, output_dir):
 
         filename = ydl.prepare_filename(info)
 
-
         if os.path.exists(filename):
             return filename
 
-
         for f in os.listdir(output_dir):
-
-            path = os.path.join(
-                output_dir,
-                f
-            )
-
+            path = os.path.join(output_dir, f)
             if os.path.isfile(path):
                 return path
 
-
-        raise Exception(
-            "Video file was not created"
-        )
-
+        raise Exception("Video file was not created")
 
 
 async def start(
@@ -98,7 +86,6 @@ async def start(
     )
 
 
-
 async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
@@ -107,19 +94,80 @@ async def handle_message(
     if update.effective_user.id != ALLOWED_USER_ID:
         return
 
-
     url = extract_x_url(
         update.message.text or ""
     )
 
-
     if not url:
-
         await update.message.reply_text(
             "لینک معتبر X بفرست."
         )
-
         return
 
+    status = await update.message.reply_text(
+        "⏳ در حال دانلود..."
+    )
 
-    status =
+    with tempfile.TemporaryDirectory() as temp_dir:
+
+        try:
+            video_path = await asyncio.to_thread(
+                download_video,
+                url,
+                temp_dir
+            )
+
+            await status.edit_text(
+                "📤 در حال ارسال..."
+            )
+
+            with open(video_path, "rb") as video:
+                await update.message.reply_video(
+                    video=video,
+                    supports_streaming=True
+                )
+
+            await status.delete()
+
+        except Exception as e:
+            print(
+                "DOWNLOAD ERROR:",
+                repr(e)
+            )
+
+            await status.edit_text(
+                "❌ دانلود ناموفق بود."
+            )
+
+
+def main():
+
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & \~filters.COMMAND,
+            handle_message
+        )
+    )
+
+    print(
+        "Bot is running..."
+    )
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
