@@ -26,40 +26,70 @@ def extract_x_url(text):
     return match.group(0) if match else None
 
 
+def pick_muxed_format(formats):
+    """
+    از بین همه‌ی فرمت‌ها، فقط اونایی که هم ویدیو هم صدا دارن (بدون نیاز به merge)
+    رو انتخاب می‌کنه و بهترین کیفیت (بیشترین ارتفاع/بیت‌ریت) رو برمی‌گردونه.
+    """
+    muxed = [
+        f for f in formats
+        if f.get("vcodec") not in (None, "none")
+        and f.get("acodec") not in (None, "none")
+        and f.get("url")
+    ]
+
+    if not muxed:
+        return None
+
+    def score(f):
+        height = f.get("height") or 0
+        tbr = f.get("tbr") or 0
+        return (height, tbr)
+
+    muxed.sort(key=score, reverse=True)
+    return muxed[0]
+
+
 def download_video(url, output_dir):
 
-    output_template = os.path.join(
-        output_dir,
-        "%(id)s.%(ext)s"
-    )
-
-    options = {
-        # فقط فرمت‌هایی که هم ویدیو هم صدا دارن (muxed) — هرگز merge نمی‌کنه
-        "format": "best[vcodec!=none][acodec!=none][ext=mp4]/best[vcodec!=none][acodec!=none]",
-
-        "outtmpl": output_template,
-
-        # جلوگیری کامل از هرگونه merge و post-process
-        "merge_output_format": None,
-        "postprocessors": [],
-        "noplaylist": True,
-
+    base_options = {
         "quiet": True,
         "no_warnings": True,
-
+        "noplaylist": True,
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         },
     }
 
-    with YoutubeDL(options) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
+    # مرحله ۱: فقط اطلاعات رو می‌گیریم، بدون دانلود
+    with YoutubeDL(base_options) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    formats = info.get("formats") or []
+    chosen = pick_muxed_format(formats)
+
+    if chosen is None:
+        raise Exception("هیچ فرمت muxed (بدون نیاز به merge) پیدا نشد")
+
+    format_id = chosen["format_id"]
+
+    output_template = os.path.join(output_dir, "%(id)s.%(ext)s")
+
+    download_options = dict(base_options)
+    download_options.update({
+        "format": format_id,
+        "outtmpl": output_template,
+        "merge_output_format": None,
+        "postprocessors": [],
+    })
+
+    with YoutubeDL(download_options) as ydl:
+        info2 = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info2)
 
         if os.path.exists(filename):
             return filename
 
-        # fallback اگر اسم فایل فرق کرده باشه
         for f in os.listdir(output_dir):
             path = os.path.join(output_dir, f)
             if os.path.isfile(path) and path.endswith((".mp4", ".mkv", ".webm")):
@@ -107,7 +137,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         except Exception as e:
             print("DOWNLOAD ERROR:", repr(e))
-            await status.edit_text("❌ دانلود ناموفق بود (ممکنه ویدیو فرمت muxed نداشته باشه).")
+            await status.edit_text("❌ دانلود ناموفق بود (فرمت بدون‌نیاز-به-merge پیدا نشد).")
 
 
 def main():
