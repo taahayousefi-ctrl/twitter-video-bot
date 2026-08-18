@@ -2,8 +2,6 @@ import os
 import re
 import asyncio
 import tempfile
-import urllib.request
-import json
 
 from telegram import Update
 from telegram.ext import (
@@ -14,7 +12,11 @@ from telegram.ext import (
     filters,
 )
 
+from yt_dlp import YoutubeDL
+
+
 BOT_TOKEN = os.environ["BOT_TOKEN"]
+
 ALLOWED_USER_ID = 1337113228
 
 
@@ -24,38 +26,52 @@ def extract_x_url(text):
     return match.group(0) if match else None
 
 
-def download_video_via_api(url, output_path):
-    # استفاده از API رایگان cobalt برای دریافت مستقیم لینک فایل mp4
-    api_url = "https://api.cobalt.tools/api/json"
-    payload = json.dumps({"url": url}).encode("utf-8")
-    
-    req = urllib.request.Request(
-        api_url,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0"
-        },
-        method="POST"
-    )
-    
-    with urllib.request.urlopen(req) as response:
-        data = json.loads(response.read().decode())
-        
-    if data.get("status") in ["stream", "redirect"]:
-        download_url = data["url"]
-    else:
-        raise Exception(f"Cobalt API error: {data}")
+def download_video(url, output_dir):
 
-    # دانلود خود فایل MP4 و ذخیره در پوشه موقت
-    urllib.request.urlretrieve(download_url, output_path)
-    return output_path
+    output_template = os.path.join(
+        output_dir,
+        "%(id)s.%(ext)s"
+    )
+
+    options = {
+        # فقط فرمت‌هایی که هم ویدیو هم صدا دارن (muxed) — هرگز merge نمی‌کنه
+        "format": "best[vcodec!=none][acodec!=none][ext=mp4]/best[vcodec!=none][acodec!=none]",
+
+        "outtmpl": output_template,
+
+        # جلوگیری کامل از هرگونه merge و post-process
+        "merge_output_format": None,
+        "postprocessors": [],
+        "noplaylist": True,
+
+        "quiet": True,
+        "no_warnings": True,
+
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        },
+    }
+
+    with YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info)
+
+        if os.path.exists(filename):
+            return filename
+
+        # fallback اگر اسم فایل فرق کرده باشه
+        for f in os.listdir(output_dir):
+            path = os.path.join(output_dir, f)
+            if os.path.isfile(path) and path.endswith((".mp4", ".mkv", ".webm")):
+                return path
+
+        raise Exception("Video file was not created")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ALLOWED_USER_ID:
         return
+
     await update.message.reply_text("لینک X/Twitter را بفرست.")
 
 
@@ -64,6 +80,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     url = extract_x_url(update.message.text or "")
+
     if not url:
         await update.message.reply_text("لینک معتبر X بفرست.")
         return
@@ -72,12 +89,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     with tempfile.TemporaryDirectory() as temp_dir:
         try:
-            video_path = os.path.join(temp_dir, "video.mp4")
-            
-            await asyncio.to_thread(
-                download_video_via_api,
+            video_path = await asyncio.to_thread(
+                download_video,
                 url,
-                video_path
+                temp_dir
             )
 
             await status.edit_text("📤 در حال ارسال...")
@@ -92,7 +107,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         except Exception as e:
             print("DOWNLOAD ERROR:", repr(e))
-            await status.edit_text("❌ دانلود ناموفق بود.")
+            await status.edit_text("❌ دانلود ناموفق بود (ممکنه ویدیو فرمت muxed نداشته باشه).")
 
 
 def main():
