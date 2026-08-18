@@ -34,8 +34,8 @@ def download_video(url, output_dir):
     )
 
     options = {
-        # فقط یک فرمت تکی (muxed) انتخاب می‌شود — هیچ merge انجام نمی‌شود
-        "format": "best[ext=mp4]/best",
+        # انتخاب بهترین فرمتی که مستقیماً از طریق لینک https دانلود می‌شود (بدون نیاز به ffmpeg و m3u8)
+        "format": "best[ext=mp4][protocol=https]/best[protocol=https]/best",
 
         # جلوگیری کامل از هرگونه merge و post-process
         "merge_output_format": None,
@@ -117,7 +117,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(
-        MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message)
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
 
     print("Bot is running...")
