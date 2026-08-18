@@ -34,27 +34,23 @@ def download_video(url, output_dir):
     )
 
     options = {
-
-        # فقط فایل آماده با صدا و تصویر
-        # بدون نیاز به ffmpeg
-        "format": "http-832/http-256/best",
+        # فقط فرمت آماده، بدون merge
+        "format": "http-832/http-256/best[ext=mp4][vcodec!=none][acodec!=none]",
 
         "outtmpl": output_template,
 
         "noplaylist": True,
 
-        "quiet": False,
-        "no_warnings": False,
+        "quiet": True,
+        "no_warnings": True,
 
-        "ignoreerrors": False,
+        # جلوگیری کامل از post process
+        "postprocessors": [],
 
         "http_headers": {
             "User-Agent":
                 "Mozilla/5.0 (Android 12; Mobile)"
         },
-
-        # جلوگیری از merge
-        "merge_output_format": None,
     }
 
 
@@ -72,11 +68,11 @@ def download_video(url, output_dir):
             return filename
 
 
-        # اگر پسوند تغییر کرده بود
-        for file in os.listdir(output_dir):
+        for f in os.listdir(output_dir):
+
             path = os.path.join(
                 output_dir,
-                file
+                f
             )
 
             if os.path.isfile(path):
@@ -98,7 +94,7 @@ async def start(
         return
 
     await update.message.reply_text(
-        "لینک ویدئوی X/Twitter را بفرست."
+        "لینک X/Twitter را بفرست."
     )
 
 
@@ -120,94 +116,10 @@ async def handle_message(
     if not url:
 
         await update.message.reply_text(
-            "فقط لینک X/Twitter بفرست."
+            "لینک معتبر X بفرست."
         )
 
         return
 
 
-    status = await update.message.reply_text(
-        "⏳ در حال دانلود..."
-    )
-
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-
-        try:
-
-            video_path = await asyncio.to_thread(
-                download_video,
-                url,
-                temp_dir
-            )
-
-
-            await status.edit_text(
-                "📤 در حال ارسال..."
-            )
-
-
-            with open(
-                video_path,
-                "rb"
-            ) as video:
-
-                await update.message.reply_video(
-                    video=video,
-                    supports_streaming=True
-                )
-
-
-            await status.delete()
-
-
-        except Exception as e:
-
-            print(
-                "DOWNLOAD ERROR:",
-                repr(e)
-            )
-
-
-            await status.edit_text(
-                "❌ دانلود ناموفق بود."
-            )
-
-
-
-def main():
-
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
-
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
-    )
-
-
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message
-        )
-    )
-
-
-    print(
-        "Bot is running..."
-    )
-
-
-    app.run_polling()
-
-
-
-if __name__ == "__main__":
-    main()
+    status =
