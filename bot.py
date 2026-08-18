@@ -4,312 +4,195 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-import requests
 from telegram import Update
 from telegram.ext import (
-Application,
-CommandHandler,
-MessageHandler,
-ContextTypes,
-filters,
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
+
 from yt_dlp import YoutubeDL
 
+
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-TUNELIO_API_KEY = os.environ.get("TUNELIO_API_KEY")
 
 ALLOWED_USER_ID = 1337113228
 
-def extract_video_url(text):
-pattern = r"https?://[^\s]+"
-match = re.search(pattern, text)
-return match.group(0) if match else None
 
-def is_youtube_url(url):
-return (
-"youtube.com/" in url
-or "youtu.be/" in url
-)
+def extract_x_url(text):
+    pattern = r"https?://(?:www\.)?(?:x\.com|twitter\.com)/[^\s]+"
+    match = re.search(pattern, text)
+    return match.group(0) if match else None
+
 
 def download_video(url, output_dir):
-output_template = os.path.join(
-output_dir,
-"%(id)s.%(ext)s"
-)
 
-options = {
-    # فقط بهترین فرمت تک‌فایلی
-    # که هم تصویر و هم صدا دارد
-    # بنابراین ffmpeg لازم نیست
-    "format": "b[ext=mp4]/b",
-
-    "outtmpl": output_template,
-    "noplaylist": True,
-
-    "quiet": False,
-    "no_warnings": False,
-
-    # جلوگیری از هرگونه merge/post-processing
-    "postprocessors": [],
-}
-
-with YoutubeDL(options) as ydl:
-    info = ydl.extract_info(
-        url,
-        download=True
+    output_template = os.path.join(
+        output_dir,
+        "%(id)s.%(ext)s"
     )
 
-    filename = ydl.prepare_filename(info)
+    options = {
+        # بدون نیاز به ffmpeg
+        "format": "best[ext=mp4]/best",
 
-    if os.path.exists(filename):
-        return filename
+        "outtmpl": output_template,
 
-    # اگر پسوند فایل با چیزی که انتظار داشتیم فرق داشت
-    base = Path(filename).stem
+        "noplaylist": True,
 
-    for file in Path(output_dir).glob(
-        f"{base}.*"
-    ):
-        if file.is_file():
-            return str(file)
+        "quiet": True,
+        "no_warnings": True,
 
-    raise Exception(
-        "Video file was not created"
-    )
+        "http_headers": {
+            "User-Agent":
+                "Mozilla/5.0 (Android 12; Mobile)"
+        },
+    }
 
-def get_tunelio_link(url):
-if not TUNELIO_API_KEY:
-raise Exception(
-"TUNELIO_API_KEY is not configured"
-)
+    with YoutubeDL(options) as ydl:
 
-response = requests.get(
-    "https://tunelio.dev/create",
-    params={
-        "quality": "480p",
-        "url": url,
-    },
-    headers={
-        "Authorization": (
-            f"Bearer {TUNELIO_API_KEY}"
-        ),
-    },
-    timeout=60,
-)
-
-# اعتبار تمام شده / کلید نامعتبر
-if response.status_code in (
-    401,
-    403,
-    429,
-):
-    raise RuntimeError(
-        "TUNELIO_LIMIT"
-    )
-
-response.raise_for_status()
-
-data = response.json()
-
-# بعضی خطاها با status=200 برمی‌گردند
-if data.get("status") != "ok":
-    error_text = str(data).lower()
-
-    if any(
-        x in error_text
-        for x in (
-            "limit",
-            "quota",
-            "credit",
-            "rate",
-            "unauthorized",
-        )
-    ):
-        raise RuntimeError(
-            "TUNELIO_LIMIT"
+        info = ydl.extract_info(
+            url,
+            download=True
         )
 
-    raise RuntimeError(
-        data.get("message")
-        or data.get("error")
-        or "Tunelio error"
-    )
+        filename = ydl.prepare_filename(info)
 
-tunnel_url = data.get("url")
+        file_path = Path(filename)
 
-if not tunnel_url:
-    raise RuntimeError(
-        "Tunelio did not return a download link"
-    )
+        if file_path.exists():
+            return str(file_path)
 
-return {
-    "url": tunnel_url,
-    "filename": data.get(
-        "filename",
-        "youtube_video.mp4"
-    ),
-    "quality": data.get(
-        "quality",
-        "480p"
-    ),
-}
+        mp4_file = file_path.with_suffix(".mp4")
+
+        if mp4_file.exists():
+            return str(mp4_file)
+
+        raise Exception(
+            "Video file was not created"
+        )
+
 
 async def start(
-update: Update,
-context: ContextTypes.DEFAULT_TYPE
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
 ):
-if update.effective_user.id != ALLOWED_USER_ID:
-return
 
-await update.message.reply_text(
-    "لینک ویدئو از X، YouTube یا Instagram را بفرست."
-)
+    if update.effective_user.id != ALLOWED_USER_ID:
+        return
+
+    await update.message.reply_text(
+        "لینک ویدئوی X/Twitter را بفرست."
+    )
+
 
 async def handle_message(
-update: Update,
-context: ContextTypes.DEFAULT_TYPE
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
 ):
-if update.effective_user.id != ALLOWED_USER_ID:
-return
 
-url = extract_video_url(
-    update.message.text or ""
-)
+    if update.effective_user.id != ALLOWED_USER_ID:
+        return
 
-if not url:
-    await update.message.reply_text(
-        "یک لینک ویدئوی معتبر بفرست."
+
+    url = extract_x_url(
+        update.message.text or ""
     )
-    return
 
-message = await update.message.reply_text(
-    "⏳ در حال بررسی لینک..."
-)
 
-# -----------------------------
-# YouTube → Tunelio
-# -----------------------------
-if is_youtube_url(url):
-    try:
-        await message.edit_text(
-            "⏳ در حال آماده‌سازی لینک YouTube..."
+    if not url:
+
+        await update.message.reply_text(
+            "فقط لینک X/Twitter بفرست."
         )
 
-        result = await asyncio.to_thread(
-            get_tunelio_link,
-            url,
-        )
+        return
 
-        filename = result["filename"]
-        tunnel_url = result["url"]
 
-        await message.edit_text(
-            f"✅ آماده شد\n\n"
-            f"🎬 {filename}\n"
-            f"📺 کیفیت: {result['quality']}\n\n"
-            f"🔗 لینک دانلود:\n{tunnel_url}"
-        )
+    status = await update.message.reply_text(
+        "⏳ در حال دانلود..."
+    )
 
-    except RuntimeError as e:
-        if str(e) == "TUNELIO_LIMIT":
-            await message.edit_text(
-                "❌ اعتبار سرویس YouTube تمام شده.\n\n"
-                "🔑 یک کلید جدید Tunelio بگیر و "
-                "متغیر TUNELIO_API_KEY را با کلید جدید تنظیم کن."
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+
+        try:
+
+            video_path = await asyncio.to_thread(
+                download_video,
+                url,
+                temp_dir
             )
-        else:
+
+
+            await status.edit_text(
+                "📤 در حال ارسال..."
+            )
+
+
+            with open(
+                video_path,
+                "rb"
+            ) as video:
+
+                await update.message.reply_video(
+                    video=video,
+                    supports_streaming=True
+                )
+
+
+            await status.delete()
+
+
+        except Exception as e:
+
             print(
-                "TUNELIO ERROR:",
-                e
+                "DOWNLOAD ERROR:",
+                repr(e)
             )
 
-            await message.edit_text(
-                "❌ سرویس YouTube نتونست لینک دانلود بسازه."
+
+            await status.edit_text(
+                "❌ دانلود ویدئو ناموفق بود."
             )
 
-    except Exception as e:
-        print(
-            "TUNELIO ERROR:",
-            repr(e)
-        )
 
-        await message.edit_text(
-            "❌ در دریافت لینک YouTube مشکلی پیش آمد."
-        )
-
-    return
-
-# -----------------------------
-# X / Instagram → yt-dlp
-# -----------------------------
-
-await message.edit_text(
-    "⏳ در حال دانلود..."
-)
-
-with tempfile.TemporaryDirectory() as temp_dir:
-    try:
-        video_path = await asyncio.to_thread(
-            download_video,
-            url,
-            temp_dir,
-        )
-
-        if not os.path.exists(video_path):
-            raise Exception(
-                "Video file was not created"
-            )
-
-        await message.edit_text(
-            "📤 در حال ارسال ویدئو..."
-        )
-
-        with open(
-            video_path,
-            "rb"
-        ) as video:
-
-            await update.message.reply_video(
-                video=video,
-                supports_streaming=True,
-            )
-
-        await message.delete()
-
-    except Exception as e:
-        print(
-            "DOWNLOAD ERROR:",
-            repr(e)
-        )
-
-        await message.edit_text(
-            "❌ نتونستم ویدئو رو دانلود کنم."
-        )
 
 def main():
-app = (
-Application.builder()
-.token(BOT_TOKEN)
-.build()
-)
 
-app.add_handler(
-    CommandHandler(
-        "start",
-        start
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
     )
-)
 
-app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_message,
+
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
     )
-)
 
-print("Bot is running...")
 
-app.run_polling()
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_message
+        )
+    )
 
-if name == "main":
-main()
+
+    print(
+        "Bot is running..."
+    )
+
+
+    app.run_polling()
+
+
+
+if __name__ == "__main__":
+    main()
